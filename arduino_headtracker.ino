@@ -43,18 +43,19 @@ hatFrame hat;
 volatile bool mpuInterrupt = false;  // indicates whether MPU interrupt pin has gone high
 void dmpDataReady() { mpuInterrupt = true; }
 
-// automatic re-centre and drift correction
+// automatic re-centre and drift correction for the gyro
 bool doRecentre = true;
 unsigned long lastRecentre = 0;
 unsigned long lastRead = 0;
 float meanGyro[3];
+float zeroGyro[3];
 
 // enable for human-readable serial communication, else encoded for hatire/opentrack
 // #define HUMAN_READABLE_MODE 
 
 // control the re-centre and drift correct of the gyro
 #define GYRO_DECAY_FACTOR 0.99
-#define GYRO_WARMUP_MILLIS 3000
+#define GYRO_WARMUP_MILLIS 250
 #define GYRO_TOLERANCE_YAW 10.0
 #define GYRO_TOLERANCE_PITCH 10.0
 #define GYRO_TOLERANCE_ROLL 5.0
@@ -62,7 +63,7 @@ float meanGyro[3];
 // control the integration of the position
 #define POS_SENSITIVITY 10.0
 #define POS_DECAY 0.9
-#define POS_WARMUP_MILLIS 1000
+#define POS_WARMUP_MILLIS 250
 
 void setup() {
     // initialize the serial connection
@@ -207,6 +208,9 @@ void loop() {
             hat.gyro[0] = (+1.0 * ypr[0] * 180.0) / M_PI;
             hat.gyro[1] = (-1.0 * ypr[2] * 180.0) / M_PI;
             hat.gyro[2] = (-1.0 * ypr[1] * 180.0) / M_PI;
+            hat.gyro[0] -= zeroGyro[0];
+            hat.gyro[1] -= zeroGyro[1];
+            hat.gyro[2] -= zeroGyro[2];
 
             // position is integrated from mm/sec^2 combined with a decay and a customizable sensitivity
             hat.pos[0] += (+1.0 * POS_SENSITIVITY * aaReal.x * seconds_since_last * seconds_since_last);
@@ -219,6 +223,9 @@ void loop() {
             meanGyro[0] = 0.0;
             meanGyro[1] = 0.0;
             meanGyro[2] = 0.0;
+            zeroGyro[0] = (+1.0 * ypr[0] * 180.0) / M_PI;
+            zeroGyro[1] = (-1.0 * ypr[2] * 180.0) / M_PI;
+            zeroGyro[2] = (-1.0 * ypr[1] * 180.0) / M_PI;
             hat.gyro[0] = 0.0;
             hat.gyro[1] = 0.0;
             hat.gyro[2] = 0.0;
