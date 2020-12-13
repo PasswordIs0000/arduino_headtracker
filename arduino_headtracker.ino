@@ -44,13 +44,16 @@ volatile bool mpuInterrupt = false;  // indicates whether MPU interrupt pin has 
 void dmpDataReady() { mpuInterrupt = true; }
 
 // automatic re-centre and drift correction
-unsigned long lastZero = 0;
+bool doRecentre = true;
+unsigned long lastRecentre = 0;
 float meanGyro[3];
 
 // #define HUMAN_READABLE_MODE // enable for human-readable serial communication, else encoded for hatire/opentrack
 #define MEAN_DECAY_FACTOR 0.99
 #define MEAN_WARMUP_MILLIS 3000
-#define MEAN_UPDATE_DEGREE 10.0
+#define MEAN_UPDATE_DEGREE_YAW 10.0
+#define MEAN_UPDATE_DEGREE_PITCH 10.0
+#define MEAN_UPDATE_DEGREE_ROLL 5.0
 
 void setup() {
     // initialize the serial connection
@@ -103,10 +106,7 @@ void setup() {
     hat.acc[2] = 0.0;
 
     // automatic re-centre and drift correction
-    meanGyro[0] = 0.0;
-    meanGyro[1] = 0.0;
-    meanGyro[2] = 0.0;
-    lastZero = millis();
+    doRecentre = true;
 
     // clear the serial input buffer
     while (Serial.available()) {
@@ -123,21 +123,23 @@ void loop() {
     if (!dmpReady) return;
 
     // centre happened in opentrack?
-    bool do_recentre = false;
     while (Serial.available()) {
-        const int cur_byte = Serial.read();
-        if (cur_byte == 'C') {
-            do_recentre = true;
+        switch (Serial.read()) {
+            case 'C':
+                doRecentre = true;
+                break;
+            default:
+                break;
         }
     }
-    if (do_recentre) {
+    if (doRecentre) {
         digitalWrite(LED_BUILTIN, HIGH);
         delay(100);
         digitalWrite(LED_BUILTIN, LOW);
         meanGyro[0] = 0.0;
         meanGyro[1] = 0.0;
         meanGyro[2] = 0.0;
-        lastZero = millis();
+        lastRecentre = millis();
     }
 
     // wait for MPU interrupt or extra packet(s) available
@@ -201,22 +203,22 @@ void loop() {
         hat.gyro[0] = (+1.0 * ypr[0] * 180.0) / M_PI;
         hat.gyro[1] = (-1.0 * ypr[2] * 180.0) / M_PI;
         hat.gyro[2] = (-1.0 * ypr[1] * 180.0) / M_PI;
-        hat.acc[0] = aaWorld.x / 10.0;
-        hat.acc[1] = aaWorld.z / 10.0;
-        hat.acc[2] = aaWorld.y / 10.0;
+        hat.acc[0] = -1.0 * (aaReal.x / 100.0);
+        hat.acc[1] = -1.0 * (aaReal.y / 100.0);
+        hat.acc[2] = +1.0 * (aaReal.z / 100.0);
 
         // automatic re-centre and drift correction
         const unsigned long curTime = millis();
-        if ((curTime-lastZero) < MEAN_WARMUP_MILLIS || fabs(meanGyro[0]-hat.gyro[0]) < MEAN_UPDATE_DEGREE) {
+        if ((curTime-lastRecentre) < MEAN_WARMUP_MILLIS || fabs(meanGyro[0]-hat.gyro[0]) < MEAN_UPDATE_DEGREE_YAW) {
             meanGyro[0] = (MEAN_DECAY_FACTOR * meanGyro[0]) + ((1.0-MEAN_DECAY_FACTOR) * hat.gyro[0]);
         }
-        if ((curTime-lastZero) < MEAN_WARMUP_MILLIS || fabs(meanGyro[1]-hat.gyro[1]) < MEAN_UPDATE_DEGREE) {
+        if ((curTime-lastRecentre) < MEAN_WARMUP_MILLIS || fabs(meanGyro[1]-hat.gyro[1]) < MEAN_UPDATE_DEGREE_PITCH) {
             meanGyro[1] = (MEAN_DECAY_FACTOR * meanGyro[1]) + ((1.0-MEAN_DECAY_FACTOR) * hat.gyro[1]);
         }
-        if ((curTime-lastZero) < MEAN_WARMUP_MILLIS || fabs(meanGyro[2]-hat.gyro[2]) < MEAN_UPDATE_DEGREE) {
+        if ((curTime-lastRecentre) < MEAN_WARMUP_MILLIS || fabs(meanGyro[2]-hat.gyro[2]) < MEAN_UPDATE_DEGREE_ROLL) {
             meanGyro[2] = (MEAN_DECAY_FACTOR * meanGyro[2]) + ((1.0-MEAN_DECAY_FACTOR) * hat.gyro[2]);
         }
-        if (do_recentre) {
+        if (doRecentre) {
             meanGyro[0] = hat.gyro[0];
             meanGyro[1] = hat.gyro[1];
             meanGyro[2] = hat.gyro[2];
@@ -251,4 +253,7 @@ void loop() {
             hat.Cpt = 0;
         }
     }
+
+    // don't recentre in the next step
+    doRecentre = false;
 }
