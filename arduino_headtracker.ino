@@ -71,10 +71,13 @@ void setup() {
     devStatus = mpu.dmpInitialize();
 
     // supply your own gyro offsets here, scaled for min sensitivity
-    mpu.setXGyroOffset(220);
-    mpu.setYGyroOffset(76);
-    mpu.setZGyroOffset(-85);
-    mpu.setZAccelOffset(1688);
+    // use https://forum.arduino.cc/index.php?action=dlattach;topic=397918.0;attach=206004 to find your offsets
+    mpu.setXAccelOffset(-2137);
+    mpu.setYAccelOffset(1454);
+    mpu.setZAccelOffset(453);
+    mpu.setXGyroOffset(51);
+    mpu.setYGyroOffset(-7);
+    mpu.setZGyroOffset(-13);
 
     if (devStatus == 0) {
         // Calibration Time: generate offsets and calibrate our MPU6050
@@ -200,12 +203,12 @@ void loop() {
 
         // fill the hatire frame
         // re-mapped and scaled the axes so it matches my hardware configuration...
-        hat.gyro[0] = (+1.0 * ypr[0] * 180.0) / M_PI;
-        hat.gyro[1] = (-1.0 * ypr[2] * 180.0) / M_PI;
-        hat.gyro[2] = (-1.0 * ypr[1] * 180.0) / M_PI;
-        hat.acc[0] = -1.0 * (aaReal.x / 100.0);
-        hat.acc[1] = -1.0 * (aaReal.y / 100.0);
-        hat.acc[2] = +1.0 * (aaReal.z / 100.0);
+        hat.gyro[0] = (+1.0 * ypr[0] * 180.0) / M_PI; // -180 to +180 degree
+        hat.gyro[1] = (-1.0 * ypr[2] * 180.0) / M_PI; // -180 to +180 degree
+        hat.gyro[2] = (-1.0 * ypr[1] * 180.0) / M_PI; // -180 to +180 degree
+        hat.acc[0] = (-1.0 * aaReal.x) / 1000.0; // meter per second^2 ???
+        hat.acc[1] = (-1.0 * aaReal.y) / 1000.0; // meter per second^2 ???
+        hat.acc[2] = (+1.0 * aaReal.z) / 1000.0; // meter per second^2 ???
 
         // automatic re-centre and drift correction
         const unsigned long curTime = millis();
@@ -228,20 +231,22 @@ void loop() {
         hat.gyro[2] = hat.gyro[2] - meanGyro[2];
 
 #ifdef HUMAN_READABLE_MODE
-        Serial.print("Device status:   \t");
-        Serial.println(devStatus);
-        Serial.print("Yaw, Pitch, Roll:\t");
-        Serial.print(hat.gyro[0]);
-        Serial.print("\t");
-        Serial.print(hat.gyro[1]);
-        Serial.print("\t");
-        Serial.println(hat.gyro[2]);
-        Serial.print("Acceleration:    \t");
-        Serial.print(hat.acc[0]);
-        Serial.print("\t");
-        Serial.print(hat.acc[1]);
-        Serial.print("\t");
-        Serial.println(hat.acc[2]);
+        if (devStatus == 0) {
+            Serial.print("Yaw, Pitch, Roll:\t");
+            Serial.print(hat.gyro[0]);
+            Serial.print("\t");
+            Serial.print(hat.gyro[1]);
+            Serial.print("\t");
+            Serial.println(hat.gyro[2]);
+            Serial.print("Acceleration:    \t");
+            Serial.print(hat.acc[0]);
+            Serial.print("\t");
+            Serial.print(hat.acc[1]);
+            Serial.print("\t");
+            Serial.println(hat.acc[2]);
+        } else {
+            Serial.println("Device not ready!!!");
+        }
 #else
         // send the hatire frame
         Serial.write((byte*)&hat, 30);
