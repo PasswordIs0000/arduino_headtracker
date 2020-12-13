@@ -55,15 +55,17 @@ float zeroGyro[3];
 
 // control the re-centre and drift correct of the gyro
 #define GYRO_DECAY_FACTOR 0.99
-#define GYRO_WARMUP_MILLIS 250
+#define GYRO_WARMUP_MILLIS 1000
 #define GYRO_TOLERANCE_YAW 10.0
 #define GYRO_TOLERANCE_PITCH 10.0
 #define GYRO_TOLERANCE_ROLL 5.0
 
 // control the integration of the position
-#define POS_SENSITIVITY 10.0
-#define POS_DECAY 0.9
+#define POS_SENSITIVITY_DEPARTURE 5.0
+#define POS_SENSITIVITY_RETURN 1.0
+#define POS_DECAY 0.99
 #define POS_WARMUP_MILLIS 250
+#define POS_DEADZONE 0.05
 
 void setup() {
     // initialize the serial connection
@@ -212,10 +214,46 @@ void loop() {
             hat.gyro[1] -= zeroGyro[1];
             hat.gyro[2] -= zeroGyro[2];
 
+            // estimated distance traveled since the last reading
+            float dist_x = +1.0 * aaReal.x * seconds_since_last * seconds_since_last;
+            float dist_y = +1.0 * aaReal.z * seconds_since_last * seconds_since_last;
+            float dist_z = +1.0 * aaReal.y * seconds_since_last * seconds_since_last;
+
+            // deadzone for the position readings
+            if (fabs(dist_x) < POS_DEADZONE) {
+                dist_x = 0.0;
+            }
+            if (fabs(dist_y) < POS_DEADZONE) {
+                dist_y = 0.0;
+            }
+            if (fabs(dist_z) < POS_DEADZONE) {
+                dist_z = 0.0;
+            }
+
+            // position sensitivity is different on departure and return
+            float pos_sens_x = POS_SENSITIVITY_DEPARTURE;
+            if (hat.pos[0] < 1.0 || hat.pos[0] > +1.0) {
+                if ((hat.pos[0] < 0.0 && dist_x > 0.0) || (hat.pos[0] > 0.0 && dist_x < 0.0)) {
+                    pos_sens_x = POS_SENSITIVITY_RETURN;
+                }
+            }
+            float pos_sens_y = POS_SENSITIVITY_DEPARTURE;
+            if (hat.pos[1] < 1.0 || hat.pos[1] > +1.0) {
+                if ((hat.pos[1] < 0.0 && dist_y > 0.0) || (hat.pos[1] > 0.0 && dist_y < 0.0)) {
+                    pos_sens_y = POS_SENSITIVITY_RETURN;
+                }
+            }
+            float pos_sens_z = POS_SENSITIVITY_DEPARTURE;
+            if (hat.pos[2] < 1.0 || hat.pos[2] > +1.0) {
+                if ((hat.pos[2] < 0.0 && dist_z > 0.0) || (hat.pos[2] > 0.0 && dist_z < 0.0)) {
+                    pos_sens_z = POS_SENSITIVITY_RETURN;
+                }
+            }
+
             // position is integrated from mm/sec^2 combined with a decay and a customizable sensitivity
-            hat.pos[0] += (+1.0 * POS_SENSITIVITY * aaReal.x * seconds_since_last * seconds_since_last);
-            hat.pos[1] += (+1.0 * POS_SENSITIVITY * aaReal.z * seconds_since_last * seconds_since_last);
-            hat.pos[2] += (+1.0 * POS_SENSITIVITY * aaReal.y * seconds_since_last * seconds_since_last);
+            hat.pos[0] += dist_x * pos_sens_x;
+            hat.pos[1] += dist_y * pos_sens_y;
+            hat.pos[2] += dist_z * pos_sens_z;
             hat.pos[0] *= POS_DECAY;
             hat.pos[1] *= POS_DECAY;
             hat.pos[2] *= POS_DECAY;
