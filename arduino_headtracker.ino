@@ -50,6 +50,9 @@ unsigned long lastRead = 0;
 float meanGyro[3];
 float zeroGyro[3];
 
+// speed calculation
+float curSpeed[3];
+
 // enable for human-readable serial communication, else encoded for hatire/opentrack
 // #define HUMAN_READABLE_MODE 
 
@@ -61,11 +64,12 @@ float zeroGyro[3];
 #define GYRO_TOLERANCE_ROLL 5.0
 
 // control the integration of the position
-#define POS_SENSITIVITY_DEPARTURE 5.0
-#define POS_SENSITIVITY_RETURN 1.0
+#define SPEED_DEADZONE 2.0
+#define SPEED_DECAY 0.9
+#define POS_SENSITIVITY 1.0
 #define POS_DECAY 0.99
+#define POS_TOLERANCE 2.0
 #define POS_WARMUP_MILLIS 250
-#define POS_DEADZONE 0.05
 
 void setup() {
     // initialize the serial connection
@@ -214,46 +218,52 @@ void loop() {
             hat.gyro[1] -= zeroGyro[1];
             hat.gyro[2] -= zeroGyro[2];
 
-            // estimated distance traveled since the last reading
-            float dist_x = +1.0 * aaReal.x * seconds_since_last * seconds_since_last;
-            float dist_y = +1.0 * aaReal.z * seconds_since_last * seconds_since_last;
-            float dist_z = +1.0 * aaReal.y * seconds_since_last * seconds_since_last;
+            // acceleration
+            const float acceleration_x = +1.0 * aaReal.x;
+            const float acceleration_y = +1.0 * aaReal.z;
+            const float acceleration_z = +1.0 * aaReal.y;
 
-            // deadzone for the position readings
-            if (fabs(dist_x) < POS_DEADZONE) {
-                dist_x = 0.0;
+            // compute the speed delta
+            float speed_delta_x = acceleration_x * seconds_since_last;
+            float speed_delta_y = acceleration_y * seconds_since_last;
+            float speed_delta_z = acceleration_z * seconds_since_last;
+            if (fabs(speed_delta_x) < SPEED_DEADZONE) {
+                speed_delta_x = 0.0;
             }
-            if (fabs(dist_y) < POS_DEADZONE) {
-                dist_y = 0.0;
+            if (fabs(speed_delta_y) < SPEED_DEADZONE) {
+                speed_delta_y = 0.0;
             }
-            if (fabs(dist_z) < POS_DEADZONE) {
-                dist_z = 0.0;
+            if (fabs(speed_delta_z) < SPEED_DEADZONE) {
+                speed_delta_z = 0.0;
             }
-
-            // position sensitivity is different on departure and return
-            float pos_sens_x = POS_SENSITIVITY_DEPARTURE;
-            if (hat.pos[0] < 1.0 || hat.pos[0] > +1.0) {
-                if ((hat.pos[0] < 0.0 && dist_x > 0.0) || (hat.pos[0] > 0.0 && dist_x < 0.0)) {
-                    pos_sens_x = POS_SENSITIVITY_RETURN;
+            if (fabs(hat.pos[0]) > POS_TOLERANCE) {
+                if ((hat.pos[0] < 0.0 && speed_delta_x > 0.0) || (hat.pos[0] > 0.0 && speed_delta_x < 0.0)) {
+                    speed_delta_x = 0.0;
                 }
             }
-            float pos_sens_y = POS_SENSITIVITY_DEPARTURE;
-            if (hat.pos[1] < 1.0 || hat.pos[1] > +1.0) {
-                if ((hat.pos[1] < 0.0 && dist_y > 0.0) || (hat.pos[1] > 0.0 && dist_y < 0.0)) {
-                    pos_sens_y = POS_SENSITIVITY_RETURN;
+            if (fabs(hat.pos[1]) > POS_TOLERANCE) {
+                if ((hat.pos[1] < 0.0 && speed_delta_y > 0.0) || (hat.pos[1] > 0.0 && speed_delta_y < 0.0)) {
+                    speed_delta_y = 0.0;
                 }
             }
-            float pos_sens_z = POS_SENSITIVITY_DEPARTURE;
-            if (hat.pos[2] < 1.0 || hat.pos[2] > +1.0) {
-                if ((hat.pos[2] < 0.0 && dist_z > 0.0) || (hat.pos[2] > 0.0 && dist_z < 0.0)) {
-                    pos_sens_z = POS_SENSITIVITY_RETURN;
+            if (fabs(hat.pos[2]) > POS_TOLERANCE) {
+                if ((hat.pos[2] < 0.0 && speed_delta_z > 0.0) || (hat.pos[2] > 0.0 && speed_delta_z < 0.0)) {
+                    speed_delta_z = 0.0;
                 }
             }
 
-            // position is integrated from mm/sec^2 combined with a decay and a customizable sensitivity
-            hat.pos[0] += dist_x * pos_sens_x;
-            hat.pos[1] += dist_y * pos_sens_y;
-            hat.pos[2] += dist_z * pos_sens_z;
+            // update the speed
+            curSpeed[0] += speed_delta_x;
+            curSpeed[1] += speed_delta_y;
+            curSpeed[2] += speed_delta_z;
+            curSpeed[0] *= SPEED_DECAY;
+            curSpeed[1] *= SPEED_DECAY;
+            curSpeed[2] *= SPEED_DECAY;
+
+            // update the position
+            hat.pos[0] += curSpeed[0] * seconds_since_last * POS_SENSITIVITY;
+            hat.pos[1] += curSpeed[1] * seconds_since_last * POS_SENSITIVITY;
+            hat.pos[2] += curSpeed[2] * seconds_since_last * POS_SENSITIVITY;
             hat.pos[0] *= POS_DECAY;
             hat.pos[1] *= POS_DECAY;
             hat.pos[2] *= POS_DECAY;
@@ -264,6 +274,9 @@ void loop() {
             zeroGyro[0] = (+1.0 * ypr[0] * 180.0) / M_PI;
             zeroGyro[1] = (-1.0 * ypr[2] * 180.0) / M_PI;
             zeroGyro[2] = (-1.0 * ypr[1] * 180.0) / M_PI;
+            curSpeed[0] = 0.0;
+            curSpeed[1] = 0.0;
+            curSpeed[2] = 0.0;
             hat.gyro[0] = 0.0;
             hat.gyro[1] = 0.0;
             hat.gyro[2] = 0.0;
@@ -304,6 +317,9 @@ void loop() {
             hat.pos[0] = 0.0;
             hat.pos[1] = 0.0;
             hat.pos[2] = 0.0;
+            curSpeed[0] = 0.0;
+            curSpeed[1] = 0.0;
+            curSpeed[2] = 0.0;
         }
 
         // meta-data for the next step
@@ -326,6 +342,12 @@ void loop() {
             Serial.print(hat.pos[1]);
             Serial.print("\t");
             Serial.println(hat.pos[2]);
+            Serial.print("Speed:           \t");
+            Serial.print(curSpeed[0]);
+            Serial.print("\t");
+            Serial.print(curSpeed[1]);
+            Serial.print("\t");
+            Serial.println(curSpeed[2]);
         } else {
             Serial.println("Device not ready!!!");
         }
