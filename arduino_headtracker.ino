@@ -33,7 +33,7 @@ typedef struct {
     int16_t Begin;  // 2  Debut
     uint16_t Cpt;   // 2  Compteur trame or Code
     float gyro[3];  // 12 [Y, P, R]    gyro
-    float acc[3];   // 12 [x, y, z]    Acc
+    float pos[3];   // 12 [x, y, z]    position
     int16_t End;    // 2  Fin
 } hatFrame;
 hatFrame hat;
@@ -46,14 +46,23 @@ void dmpDataReady() { mpuInterrupt = true; }
 // automatic re-centre and drift correction
 bool doRecentre = true;
 unsigned long lastRecentre = 0;
+unsigned long lastRead = 0;
 float meanGyro[3];
 
-// #define HUMAN_READABLE_MODE // enable for human-readable serial communication, else encoded for hatire/opentrack
-#define MEAN_DECAY_FACTOR 0.99
-#define MEAN_WARMUP_MILLIS 3000
-#define MEAN_UPDATE_DEGREE_YAW 10.0
-#define MEAN_UPDATE_DEGREE_PITCH 10.0
-#define MEAN_UPDATE_DEGREE_ROLL 5.0
+// enable for human-readable serial communication, else encoded for hatire/opentrack
+// #define HUMAN_READABLE_MODE 
+
+// control the re-centre and drift correct of the gyro
+#define GYRO_DECAY_FACTOR 0.99
+#define GYRO_WARMUP_MILLIS 3000
+#define GYRO_TOLERANCE_YAW 10.0
+#define GYRO_TOLERANCE_PITCH 10.0
+#define GYRO_TOLERANCE_ROLL 5.0
+
+// control the integration of the position
+#define POS_SENSITIVITY 10.0
+#define POS_DECAY 0.9
+#define POS_WARMUP_MILLIS 1000
 
 void setup() {
     // initialize the serial connection
@@ -101,15 +110,10 @@ void setup() {
     hat.Begin = 0xAAAA;
     hat.Cpt = 0;
     hat.End = 0x5555;
-    hat.gyro[0] = 0.0;
-    hat.gyro[1] = 0.0;
-    hat.gyro[2] = 0.0;
-    hat.acc[0] = 0.0;
-    hat.acc[1] = 0.0;
-    hat.acc[2] = 0.0;
 
-    // automatic re-centre and drift correction
+    // meta-data for the iterations
     doRecentre = true;
+    lastRead = 0;
 
     // clear the serial input buffer
     while (Serial.available()) {
@@ -134,15 +138,6 @@ void loop() {
             default:
                 break;
         }
-    }
-    if (doRecentre) {
-        digitalWrite(LED_BUILTIN, HIGH);
-        delay(100);
-        digitalWrite(LED_BUILTIN, LOW);
-        meanGyro[0] = 0.0;
-        meanGyro[1] = 0.0;
-        meanGyro[2] = 0.0;
-        lastRecentre = millis();
     }
 
     // wait for MPU interrupt or extra packet(s) available
@@ -201,25 +196,54 @@ void loop() {
         mpu.dmpGetLinearAccel(&aaReal, &aa, &gravity);
         mpu.dmpGetLinearAccelInWorld(&aaWorld, &aaReal, &q);
 
-        // fill the hatire frame
-        // re-mapped and scaled the axes so it matches my hardware configuration...
-        hat.gyro[0] = (+1.0 * ypr[0] * 180.0) / M_PI; // -180 to +180 degree
-        hat.gyro[1] = (-1.0 * ypr[2] * 180.0) / M_PI; // -180 to +180 degree
-        hat.gyro[2] = (-1.0 * ypr[1] * 180.0) / M_PI; // -180 to +180 degree
-        hat.acc[0] = (-1.0 * aaReal.x) / 1000.0; // meter per second^2 ???
-        hat.acc[1] = (-1.0 * aaReal.y) / 1000.0; // meter per second^2 ???
-        hat.acc[2] = (+1.0 * aaReal.z) / 1000.0; // meter per second^2 ???
+        // time measurement
+        const unsigned long cur_time = millis();
+        const float seconds_since_last = (float)(cur_time - lastRead) / 1000.0;
 
-        // automatic re-centre and drift correction
-        const unsigned long curTime = millis();
-        if ((curTime-lastRecentre) < MEAN_WARMUP_MILLIS || fabs(meanGyro[0]-hat.gyro[0]) < MEAN_UPDATE_DEGREE_YAW) {
-            meanGyro[0] = (MEAN_DECAY_FACTOR * meanGyro[0]) + ((1.0-MEAN_DECAY_FACTOR) * hat.gyro[0]);
+        // fill the hatire frame
+        // mapped and inverted the axes so it matches my hardware configuration
+        if (lastRead > 0 && !doRecentre) {
+            // gyro is in absolute -180 to +180 degree
+            hat.gyro[0] = (+1.0 * ypr[0] * 180.0) / M_PI;
+            hat.gyro[1] = (-1.0 * ypr[2] * 180.0) / M_PI;
+            hat.gyro[2] = (-1.0 * ypr[1] * 180.0) / M_PI;
+
+            // position is integrated from mm/sec^2 combined with a decay and a customizable sensitivity
+            hat.pos[0] += (+1.0 * POS_SENSITIVITY * aaReal.x * seconds_since_last * seconds_since_last);
+            hat.pos[1] += (+1.0 * POS_SENSITIVITY * aaReal.z * seconds_since_last * seconds_since_last);
+            hat.pos[2] += (+1.0 * POS_SENSITIVITY * aaReal.y * seconds_since_last * seconds_since_last);
+            hat.pos[0] *= POS_DECAY;
+            hat.pos[1] *= POS_DECAY;
+            hat.pos[2] *= POS_DECAY;
+        } else {
+            meanGyro[0] = 0.0;
+            meanGyro[1] = 0.0;
+            meanGyro[2] = 0.0;
+            hat.gyro[0] = 0.0;
+            hat.gyro[1] = 0.0;
+            hat.gyro[2] = 0.0;
+            hat.pos[0] = 0.0;
+            hat.pos[1] = 0.0;
+            hat.pos[2] = 0.0;
         }
-        if ((curTime-lastRecentre) < MEAN_WARMUP_MILLIS || fabs(meanGyro[1]-hat.gyro[1]) < MEAN_UPDATE_DEGREE_PITCH) {
-            meanGyro[1] = (MEAN_DECAY_FACTOR * meanGyro[1]) + ((1.0-MEAN_DECAY_FACTOR) * hat.gyro[1]);
+        
+        // meta-data for next step
+        if (doRecentre) {
+            digitalWrite(LED_BUILTIN, HIGH);
+            delay(100);
+            digitalWrite(LED_BUILTIN, LOW);
+            lastRecentre = cur_time;
         }
-        if ((curTime-lastRecentre) < MEAN_WARMUP_MILLIS || fabs(meanGyro[2]-hat.gyro[2]) < MEAN_UPDATE_DEGREE_ROLL) {
-            meanGyro[2] = (MEAN_DECAY_FACTOR * meanGyro[2]) + ((1.0-MEAN_DECAY_FACTOR) * hat.gyro[2]);
+
+        // automatic re-centre and drift correction for the gyro
+        if ((cur_time-lastRecentre) < GYRO_WARMUP_MILLIS || fabs(meanGyro[0]-hat.gyro[0]) < GYRO_TOLERANCE_YAW) {
+            meanGyro[0] = (GYRO_DECAY_FACTOR * meanGyro[0]) + ((1.0-GYRO_DECAY_FACTOR) * hat.gyro[0]);
+        }
+        if ((cur_time-lastRecentre) < GYRO_WARMUP_MILLIS || fabs(meanGyro[1]-hat.gyro[1]) < GYRO_TOLERANCE_PITCH) {
+            meanGyro[1] = (GYRO_DECAY_FACTOR * meanGyro[1]) + ((1.0-GYRO_DECAY_FACTOR) * hat.gyro[1]);
+        }
+        if ((cur_time-lastRecentre) < GYRO_WARMUP_MILLIS || fabs(meanGyro[2]-hat.gyro[2]) < GYRO_TOLERANCE_ROLL) {
+            meanGyro[2] = (GYRO_DECAY_FACTOR * meanGyro[2]) + ((1.0-GYRO_DECAY_FACTOR) * hat.gyro[2]);
         }
         if (doRecentre) {
             meanGyro[0] = hat.gyro[0];
@@ -230,35 +254,45 @@ void loop() {
         hat.gyro[1] = hat.gyro[1] - meanGyro[1];
         hat.gyro[2] = hat.gyro[2] - meanGyro[2];
 
+        // give the position translation some warmup time
+        if ((cur_time-lastRecentre) < POS_WARMUP_MILLIS) {
+            hat.pos[0] = 0.0;
+            hat.pos[1] = 0.0;
+            hat.pos[2] = 0.0;
+        }
+
+        // meta-data for the next step
+        doRecentre = false;
+        lastRead = cur_time;
+
 #ifdef HUMAN_READABLE_MODE
         if (devStatus == 0) {
+            Serial.print("Sec. since last: \t");
+            Serial.println(seconds_since_last);
             Serial.print("Yaw, Pitch, Roll:\t");
             Serial.print(hat.gyro[0]);
             Serial.print("\t");
             Serial.print(hat.gyro[1]);
             Serial.print("\t");
             Serial.println(hat.gyro[2]);
-            Serial.print("Acceleration:    \t");
-            Serial.print(hat.acc[0]);
+            Serial.print("Position:        \t");
+            Serial.print(hat.pos[0]);
             Serial.print("\t");
-            Serial.print(hat.acc[1]);
+            Serial.print(hat.pos[1]);
             Serial.print("\t");
-            Serial.println(hat.acc[2]);
+            Serial.println(hat.pos[2]);
         } else {
             Serial.println("Device not ready!!!");
         }
 #else
         // send the hatire frame
         Serial.write((byte*)&hat, 30);
-#endif
 
         // increase the frame counter
         hat.Cpt++;
         if (hat.Cpt > 999) {
             hat.Cpt = 0;
         }
+#endif
     }
-
-    // don't recentre in the next step
-    doRecentre = false;
 }
