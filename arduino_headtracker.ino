@@ -23,7 +23,6 @@ uint8_t fifoBuffer[64];  // FIFO storage buffer
 Quaternion q;         // [w, x, y, z]         quaternion container
 VectorInt16 aa;       // [x, y, z]            accel sensor measurements
 VectorInt16 aaReal;   // [x, y, z]            gravity-free accel sensor measurements
-VectorInt16 aaWorld;  // [x, y, z]            world-frame accel sensor measurements
 VectorFloat gravity;  // [x, y, z]            gravity vector
 float euler[3];       // [psi, theta, phi]    Euler angle container
 float ypr[3];         // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
@@ -38,37 +37,46 @@ typedef struct {
 } hatFrame;
 hatFrame hat;
 
-#define INTERRUPT_PIN 7
-
 volatile bool mpuInterrupt = false;  // indicates whether MPU interrupt pin has gone high
 void dmpDataReady() { mpuInterrupt = true; }
 
-// automatic re-centre and drift correction for the gyro
+// general information about the tracking
 bool doRecentre = true;
 unsigned long lastRecentre = 0;
 unsigned long lastRead = 0;
+
+// automatic re-centre and drift correction for the gyro
 float meanGyro[3];
 float zeroGyro[3];
 
-// speed calculation
+// speed calculation and automatic re-centre and drift correction for the position
 float curSpeed[3];
 
-// enable for human-readable serial communication, else encoded for hatire/opentrack
-// #define HUMAN_READABLE_MODE 
+// helper
+#define SET_ARRAY_ZERO(_arr) { (_arr)[0] = 0.0; (_arr)[1] = 0.0; (_arr)[2] = 0.0; }
 
-// control the re-centre and drift correct of the gyro
+// enable for human-readable serial communication, else encoded for hatire/opentrack
+// #define HUMAN_READABLE_MODE
+
+// hardware configuration
+#define INTERRUPT_PIN 7
+
+// control the zero estimation
+#define ZERO_DECAY_FACTOR 0.9
+
+// control the gyro
 #define GYRO_DECAY_FACTOR 0.99
 #define GYRO_WARMUP_MILLIS 1000
-#define GYRO_TOLERANCE_YAW 10.0
-#define GYRO_TOLERANCE_PITCH 10.0
-#define GYRO_TOLERANCE_ROLL 5.0
+#define GYRO_NEUTRAL_WINDOW_YAW 10.0
+#define GYRO_NEUTRAL_WINDOW_PITCH 10.0
+#define GYRO_NEUTRAL_WINDOW_ROLL 5.0
 
-// control the integration of the position
+// control the position
 #define SPEED_DEADZONE 2.0
-#define SPEED_DECAY 0.9
+#define SPEED_DECAY_FACTOR 0.9
 #define POS_SENSITIVITY 1.0
-#define POS_DECAY 0.99
-#define POS_TOLERANCE 2.0
+#define POS_DECAY_FACTOR 0.99
+#define POS_NEUTRAL_WINDOW 2.0
 #define POS_WARMUP_MILLIS 250
 
 void setup() {
@@ -196,12 +204,11 @@ void loop() {
         mpu.dmpGetGravity(&gravity, &q);
         mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
 
-        // acceleration adjusted for gravity and orientation
+        // acceleration adjusted for gravity
         mpu.dmpGetQuaternion(&q, fifoBuffer);
         mpu.dmpGetAccel(&aa, fifoBuffer);
         mpu.dmpGetGravity(&gravity, &q);
         mpu.dmpGetLinearAccel(&aaReal, &aa, &gravity);
-        mpu.dmpGetLinearAccelInWorld(&aaWorld, &aaReal, &q);
 
         // time measurement
         const unsigned long cur_time = millis();
@@ -211,12 +218,9 @@ void loop() {
         // mapped and inverted the axes so it matches my hardware configuration
         if (lastRead > 0 && !doRecentre) {
             // gyro is in absolute -180 to +180 degree
-            hat.gyro[0] = (+1.0 * ypr[0] * 180.0) / M_PI;
-            hat.gyro[1] = (-1.0 * ypr[2] * 180.0) / M_PI;
-            hat.gyro[2] = (-1.0 * ypr[1] * 180.0) / M_PI;
-            hat.gyro[0] -= zeroGyro[0];
-            hat.gyro[1] -= zeroGyro[1];
-            hat.gyro[2] -= zeroGyro[2];
+            hat.gyro[0] = (+1.0 * (ypr[0]-zeroGyro[0]) * 180.0) / M_PI;
+            hat.gyro[1] = (-1.0 * (ypr[2]-zeroGyro[2]) * 180.0) / M_PI;
+            hat.gyro[2] = (-1.0 * (ypr[1]-zeroGyro[1]) * 180.0) / M_PI;
 
             // acceleration
             const float acceleration_x = +1.0 * aaReal.x;
@@ -236,17 +240,17 @@ void loop() {
             if (fabs(speed_delta_z) < SPEED_DEADZONE) {
                 speed_delta_z = 0.0;
             }
-            if (fabs(hat.pos[0]) > POS_TOLERANCE) {
+            if (fabs(hat.pos[0]) > POS_NEUTRAL_WINDOW) {
                 if ((hat.pos[0] < 0.0 && speed_delta_x > 0.0) || (hat.pos[0] > 0.0 && speed_delta_x < 0.0)) {
                     speed_delta_x = 0.0;
                 }
             }
-            if (fabs(hat.pos[1]) > POS_TOLERANCE) {
+            if (fabs(hat.pos[1]) > POS_NEUTRAL_WINDOW) {
                 if ((hat.pos[1] < 0.0 && speed_delta_y > 0.0) || (hat.pos[1] > 0.0 && speed_delta_y < 0.0)) {
                     speed_delta_y = 0.0;
                 }
             }
-            if (fabs(hat.pos[2]) > POS_TOLERANCE) {
+            if (fabs(hat.pos[2]) > POS_NEUTRAL_WINDOW) {
                 if ((hat.pos[2] < 0.0 && speed_delta_z > 0.0) || (hat.pos[2] > 0.0 && speed_delta_z < 0.0)) {
                     speed_delta_z = 0.0;
                 }
@@ -256,33 +260,25 @@ void loop() {
             curSpeed[0] += speed_delta_x;
             curSpeed[1] += speed_delta_y;
             curSpeed[2] += speed_delta_z;
-            curSpeed[0] *= SPEED_DECAY;
-            curSpeed[1] *= SPEED_DECAY;
-            curSpeed[2] *= SPEED_DECAY;
+            curSpeed[0] *= SPEED_DECAY_FACTOR;
+            curSpeed[1] *= SPEED_DECAY_FACTOR;
+            curSpeed[2] *= SPEED_DECAY_FACTOR;
 
             // update the position
             hat.pos[0] += curSpeed[0] * seconds_since_last * POS_SENSITIVITY;
             hat.pos[1] += curSpeed[1] * seconds_since_last * POS_SENSITIVITY;
             hat.pos[2] += curSpeed[2] * seconds_since_last * POS_SENSITIVITY;
-            hat.pos[0] *= POS_DECAY;
-            hat.pos[1] *= POS_DECAY;
-            hat.pos[2] *= POS_DECAY;
+            hat.pos[0] *= POS_DECAY_FACTOR;
+            hat.pos[1] *= POS_DECAY_FACTOR;
+            hat.pos[2] *= POS_DECAY_FACTOR;
         } else {
-            meanGyro[0] = 0.0;
-            meanGyro[1] = 0.0;
-            meanGyro[2] = 0.0;
-            zeroGyro[0] = (+1.0 * ypr[0] * 180.0) / M_PI;
-            zeroGyro[1] = (-1.0 * ypr[2] * 180.0) / M_PI;
-            zeroGyro[2] = (-1.0 * ypr[1] * 180.0) / M_PI;
-            curSpeed[0] = 0.0;
-            curSpeed[1] = 0.0;
-            curSpeed[2] = 0.0;
-            hat.gyro[0] = 0.0;
-            hat.gyro[1] = 0.0;
-            hat.gyro[2] = 0.0;
-            hat.pos[0] = 0.0;
-            hat.pos[1] = 0.0;
-            hat.pos[2] = 0.0;
+            SET_ARRAY_ZERO(meanGyro);
+            SET_ARRAY_ZERO(curSpeed);
+            SET_ARRAY_ZERO(hat.gyro);
+            SET_ARRAY_ZERO(hat.pos);
+            zeroGyro[0] = ypr[0];
+            zeroGyro[1] = ypr[1];
+            zeroGyro[2] = ypr[2];
         }
         
         // meta-data for next step
@@ -293,14 +289,21 @@ void loop() {
             lastRecentre = cur_time;
         }
 
+        // update the zero values
+        if ((cur_time-lastRecentre) < GYRO_WARMUP_MILLIS) {
+            zeroGyro[0] = (ZERO_DECAY_FACTOR * zeroGyro[0]) + ((1.0-ZERO_DECAY_FACTOR) * ypr[0]);
+            zeroGyro[1] = (ZERO_DECAY_FACTOR * zeroGyro[1]) + ((1.0-ZERO_DECAY_FACTOR) * ypr[1]);
+            zeroGyro[2] = (ZERO_DECAY_FACTOR * zeroGyro[2]) + ((1.0-ZERO_DECAY_FACTOR) * ypr[2]);
+        }
+
         // automatic re-centre and drift correction for the gyro
-        if ((cur_time-lastRecentre) < GYRO_WARMUP_MILLIS || fabs(meanGyro[0]-hat.gyro[0]) < GYRO_TOLERANCE_YAW) {
+        if ((cur_time-lastRecentre) < GYRO_WARMUP_MILLIS || fabs(meanGyro[0]-hat.gyro[0]) < GYRO_NEUTRAL_WINDOW_YAW) {
             meanGyro[0] = (GYRO_DECAY_FACTOR * meanGyro[0]) + ((1.0-GYRO_DECAY_FACTOR) * hat.gyro[0]);
         }
-        if ((cur_time-lastRecentre) < GYRO_WARMUP_MILLIS || fabs(meanGyro[1]-hat.gyro[1]) < GYRO_TOLERANCE_PITCH) {
+        if ((cur_time-lastRecentre) < GYRO_WARMUP_MILLIS || fabs(meanGyro[1]-hat.gyro[1]) < GYRO_NEUTRAL_WINDOW_PITCH) {
             meanGyro[1] = (GYRO_DECAY_FACTOR * meanGyro[1]) + ((1.0-GYRO_DECAY_FACTOR) * hat.gyro[1]);
         }
-        if ((cur_time-lastRecentre) < GYRO_WARMUP_MILLIS || fabs(meanGyro[2]-hat.gyro[2]) < GYRO_TOLERANCE_ROLL) {
+        if ((cur_time-lastRecentre) < GYRO_WARMUP_MILLIS || fabs(meanGyro[2]-hat.gyro[2]) < GYRO_NEUTRAL_WINDOW_ROLL) {
             meanGyro[2] = (GYRO_DECAY_FACTOR * meanGyro[2]) + ((1.0-GYRO_DECAY_FACTOR) * hat.gyro[2]);
         }
         if (doRecentre) {
@@ -312,14 +315,16 @@ void loop() {
         hat.gyro[1] = hat.gyro[1] - meanGyro[1];
         hat.gyro[2] = hat.gyro[2] - meanGyro[2];
 
+        // lock to zero translation if the yaw or pitch is too far off center, e.g. if checking your 6
+        if (fabs(hat.gyro[0]) > GYRO_NEUTRAL_WINDOW_YAW || fabs(hat.gyro[1]) > GYRO_NEUTRAL_WINDOW_PITCH) {
+            SET_ARRAY_ZERO(hat.pos);
+            SET_ARRAY_ZERO(curSpeed);
+        }
+
         // give the position translation some warmup time
         if ((cur_time-lastRecentre) < POS_WARMUP_MILLIS) {
-            hat.pos[0] = 0.0;
-            hat.pos[1] = 0.0;
-            hat.pos[2] = 0.0;
-            curSpeed[0] = 0.0;
-            curSpeed[1] = 0.0;
-            curSpeed[2] = 0.0;
+            SET_ARRAY_ZERO(hat.pos);
+            SET_ARRAY_ZERO(curSpeed);
         }
 
         // meta-data for the next step
