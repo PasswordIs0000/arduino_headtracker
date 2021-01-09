@@ -21,8 +21,6 @@ uint8_t fifoBuffer[64];  // FIFO storage buffer
 
 // orientation/motion vars
 Quaternion q;         // [w, x, y, z]         quaternion container
-VectorInt16 aa;       // [x, y, z]            accel sensor measurements
-VectorInt16 aaReal;   // [x, y, z]            gravity-free accel sensor measurements
 VectorFloat gravity;  // [x, y, z]            gravity vector
 float euler[3];       // [psi, theta, phi]    Euler angle container
 float ypr[3];         // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
@@ -49,9 +47,6 @@ unsigned long lastRead = 0;
 float meanGyro[3];
 float zeroGyro[3];
 
-// speed calculation and automatic re-centre and drift correction for the position
-float curSpeed[3];
-
 // helper
 #define SET_ARRAY_ZERO(_arr) { (_arr)[0] = 0.0; (_arr)[1] = 0.0; (_arr)[2] = 0.0; }
 
@@ -71,17 +66,10 @@ float curSpeed[3];
 #define GYRO_NEUTRAL_WINDOW_PITCH 10.0
 #define GYRO_NEUTRAL_WINDOW_ROLL 5.0
 
-// control the position
-#define SPEED_DEADZONE 2.0
-#define SPEED_DECAY_FACTOR 0.9
-#define POS_SENSITIVITY 1.0
-#define POS_DECAY_FACTOR 0.99
-#define POS_NEUTRAL_WINDOW 2.0
-#define POS_WARMUP_MILLIS 250
-
 void setup() {
     // initialize the serial connection
     Serial.begin(115200);
+    delay(1000);
 
 // initialize the sensor
 #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
@@ -125,6 +113,7 @@ void setup() {
     hat.Begin = 0xAAAA;
     hat.Cpt = 0;
     hat.End = 0x5555;
+    SET_ARRAY_ZERO(hat.pos);
 
     // meta-data for the iterations
     doRecentre = true;
@@ -204,15 +193,8 @@ void loop() {
         mpu.dmpGetGravity(&gravity, &q);
         mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
 
-        // acceleration adjusted for gravity
-        mpu.dmpGetQuaternion(&q, fifoBuffer);
-        mpu.dmpGetAccel(&aa, fifoBuffer);
-        mpu.dmpGetGravity(&gravity, &q);
-        mpu.dmpGetLinearAccel(&aaReal, &aa, &gravity);
-
         // time measurement
         const unsigned long cur_time = millis();
-        const float seconds_since_last = (float)(cur_time - lastRead) / 1000.0;
 
         // fill the hatire frame
         // mapped and inverted the axes so it matches my hardware configuration
@@ -221,59 +203,8 @@ void loop() {
             hat.gyro[0] = (+1.0 * (ypr[0]-zeroGyro[0]) * 180.0) / M_PI;
             hat.gyro[1] = (-1.0 * (ypr[2]-zeroGyro[2]) * 180.0) / M_PI;
             hat.gyro[2] = (-1.0 * (ypr[1]-zeroGyro[1]) * 180.0) / M_PI;
-
-            // acceleration
-            const float acceleration_x = +1.0 * aaReal.x;
-            const float acceleration_y = +1.0 * aaReal.z;
-            const float acceleration_z = +1.0 * aaReal.y;
-
-            // compute the speed delta
-            float speed_delta_x = acceleration_x * seconds_since_last;
-            float speed_delta_y = acceleration_y * seconds_since_last;
-            float speed_delta_z = acceleration_z * seconds_since_last;
-            if (fabs(speed_delta_x) < SPEED_DEADZONE) {
-                speed_delta_x = 0.0;
-            }
-            if (fabs(speed_delta_y) < SPEED_DEADZONE) {
-                speed_delta_y = 0.0;
-            }
-            if (fabs(speed_delta_z) < SPEED_DEADZONE) {
-                speed_delta_z = 0.0;
-            }
-            if (fabs(hat.pos[0]) > POS_NEUTRAL_WINDOW) {
-                if ((hat.pos[0] < 0.0 && speed_delta_x > 0.0) || (hat.pos[0] > 0.0 && speed_delta_x < 0.0)) {
-                    speed_delta_x = 0.0;
-                }
-            }
-            if (fabs(hat.pos[1]) > POS_NEUTRAL_WINDOW) {
-                if ((hat.pos[1] < 0.0 && speed_delta_y > 0.0) || (hat.pos[1] > 0.0 && speed_delta_y < 0.0)) {
-                    speed_delta_y = 0.0;
-                }
-            }
-            if (fabs(hat.pos[2]) > POS_NEUTRAL_WINDOW) {
-                if ((hat.pos[2] < 0.0 && speed_delta_z > 0.0) || (hat.pos[2] > 0.0 && speed_delta_z < 0.0)) {
-                    speed_delta_z = 0.0;
-                }
-            }
-
-            // update the speed
-            curSpeed[0] += speed_delta_x;
-            curSpeed[1] += speed_delta_y;
-            curSpeed[2] += speed_delta_z;
-            curSpeed[0] *= SPEED_DECAY_FACTOR;
-            curSpeed[1] *= SPEED_DECAY_FACTOR;
-            curSpeed[2] *= SPEED_DECAY_FACTOR;
-
-            // update the position
-            hat.pos[0] += curSpeed[0] * seconds_since_last * POS_SENSITIVITY;
-            hat.pos[1] += curSpeed[1] * seconds_since_last * POS_SENSITIVITY;
-            hat.pos[2] += curSpeed[2] * seconds_since_last * POS_SENSITIVITY;
-            hat.pos[0] *= POS_DECAY_FACTOR;
-            hat.pos[1] *= POS_DECAY_FACTOR;
-            hat.pos[2] *= POS_DECAY_FACTOR;
         } else {
             SET_ARRAY_ZERO(meanGyro);
-            SET_ARRAY_ZERO(curSpeed);
             SET_ARRAY_ZERO(hat.gyro);
             SET_ARRAY_ZERO(hat.pos);
             zeroGyro[0] = ypr[0];
@@ -318,13 +249,6 @@ void loop() {
         // lock to zero translation if the yaw or pitch is too far off center, e.g. if checking your 6
         if (fabs(hat.gyro[0]) > GYRO_NEUTRAL_WINDOW_YAW || fabs(hat.gyro[1]) > GYRO_NEUTRAL_WINDOW_PITCH) {
             SET_ARRAY_ZERO(hat.pos);
-            SET_ARRAY_ZERO(curSpeed);
-        }
-
-        // give the position translation some warmup time
-        if ((cur_time-lastRecentre) < POS_WARMUP_MILLIS) {
-            SET_ARRAY_ZERO(hat.pos);
-            SET_ARRAY_ZERO(curSpeed);
         }
 
         // meta-data for the next step
@@ -333,26 +257,12 @@ void loop() {
 
 #ifdef HUMAN_READABLE_MODE
         if (devStatus == 0) {
-            Serial.print("Sec. since last: \t");
-            Serial.println(seconds_since_last);
             Serial.print("Yaw, Pitch, Roll:\t");
             Serial.print(hat.gyro[0]);
             Serial.print("\t");
             Serial.print(hat.gyro[1]);
             Serial.print("\t");
             Serial.println(hat.gyro[2]);
-            Serial.print("Position:        \t");
-            Serial.print(hat.pos[0]);
-            Serial.print("\t");
-            Serial.print(hat.pos[1]);
-            Serial.print("\t");
-            Serial.println(hat.pos[2]);
-            Serial.print("Speed:           \t");
-            Serial.print(curSpeed[0]);
-            Serial.print("\t");
-            Serial.print(curSpeed[1]);
-            Serial.print("\t");
-            Serial.println(curSpeed[2]);
         } else {
             Serial.println("Device not ready!!!");
         }
