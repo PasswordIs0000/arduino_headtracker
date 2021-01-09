@@ -41,7 +41,6 @@ void dmpDataReady() { mpuInterrupt = true; }
 // general information about the tracking
 bool doRecentre = true;
 unsigned long lastRecentre = 0;
-unsigned long lastRead = 0;
 
 // automatic re-centre and drift correction for the gyro
 float meanGyro[3];
@@ -61,10 +60,10 @@ float zeroGyro[3];
 
 // control the gyro
 #define GYRO_DECAY_FACTOR 0.99
-#define GYRO_WARMUP_MILLIS 1000
-#define GYRO_NEUTRAL_WINDOW_YAW 10.0
-#define GYRO_NEUTRAL_WINDOW_PITCH 10.0
-#define GYRO_NEUTRAL_WINDOW_ROLL 5.0
+#define GYRO_WARMUP_MILLIS 500
+#define GYRO_NEUTRAL_WINDOW_YAW 5.0
+#define GYRO_NEUTRAL_WINDOW_PITCH 5.0
+#define GYRO_NEUTRAL_WINDOW_ROLL 3.0
 
 void setup() {
     // initialize the serial connection
@@ -117,7 +116,6 @@ void setup() {
 
     // meta-data for the iterations
     doRecentre = true;
-    lastRead = 0;
 
     // clear the serial input buffer
     while (Serial.available()) {
@@ -198,18 +196,18 @@ void loop() {
 
         // fill the hatire frame
         // mapped and inverted the axes so it matches my hardware configuration
-        if (lastRead > 0 && !doRecentre) {
-            // gyro is in absolute -180 to +180 degree
-            hat.gyro[0] = (+1.0 * (ypr[0]-zeroGyro[0]) * 180.0) / M_PI;
-            hat.gyro[1] = (-1.0 * (ypr[2]-zeroGyro[2]) * 180.0) / M_PI;
-            hat.gyro[2] = (-1.0 * (ypr[1]-zeroGyro[1]) * 180.0) / M_PI;
-        } else {
+        if (doRecentre) {
             SET_ARRAY_ZERO(meanGyro);
             SET_ARRAY_ZERO(hat.gyro);
             SET_ARRAY_ZERO(hat.pos);
             zeroGyro[0] = ypr[0];
             zeroGyro[1] = ypr[1];
             zeroGyro[2] = ypr[2];
+        } else {
+            // gyro is in absolute -180 to +180 degree
+            hat.gyro[0] = (+1.0 * (ypr[0]-zeroGyro[0]) * 180.0) / M_PI;
+            hat.gyro[1] = (-1.0 * (ypr[2]-zeroGyro[2]) * 180.0) / M_PI;
+            hat.gyro[2] = (-1.0 * (ypr[1]-zeroGyro[1]) * 180.0) / M_PI;
         }
         
         // meta-data for next step
@@ -246,14 +244,8 @@ void loop() {
         hat.gyro[1] = hat.gyro[1] - meanGyro[1];
         hat.gyro[2] = hat.gyro[2] - meanGyro[2];
 
-        // lock to zero translation if the yaw or pitch is too far off center, e.g. if checking your 6
-        if (fabs(hat.gyro[0]) > GYRO_NEUTRAL_WINDOW_YAW || fabs(hat.gyro[1]) > GYRO_NEUTRAL_WINDOW_PITCH) {
-            SET_ARRAY_ZERO(hat.pos);
-        }
-
-        // meta-data for the next step
+        // don't re-centre in the next step
         doRecentre = false;
-        lastRead = cur_time;
 
 #ifdef HUMAN_READABLE_MODE
         if (devStatus == 0) {
