@@ -88,6 +88,27 @@ void setup() {
 }
 
 void loop() {
+    // is the sensor calibrated?
+    uint8_t cal_system = 0;
+    uint8_t cal_gyro = 0;
+    uint8_t cal_accel = 0;
+    uint8_t cal_mag = 0;
+    bno.getCalibration(&cal_system, &cal_gyro, &cal_accel, &cal_mag);
+#ifdef HUMAN_READABLE_MODE
+    Serial.print("CalSystem, CalGyro, CalAccel, CalMag:\t");
+    Serial.print(cal_system);
+    Serial.print("\t");
+    Serial.print(cal_gyro);
+    Serial.print("\t");
+    Serial.print(cal_accel);
+    Serial.print("\t");
+    Serial.println(cal_mag);
+#endif
+    if (cal_system == 0) {
+        delay(10);
+        return;
+    }
+
     // read from the sensor
     sensors_event_t event; 
     bno.getEvent(&event);
