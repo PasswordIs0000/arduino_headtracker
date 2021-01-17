@@ -119,7 +119,7 @@ void loop() {
     const unsigned long cur_time = (t_sensor_start + t_sensor_finish) / 2;
 
     // 3-array from -180 to +180 degrees each
-    const float ypr[3] = {
+    const float orientation[3] = {
         degrees_in_180(sensor_data.orientation.x),
         degrees_in_180(sensor_data.orientation.y),
         degrees_in_180(sensor_data.orientation.z)
@@ -141,23 +141,23 @@ void loop() {
         SET_ARRAY_ZERO(meanGyro);
         SET_ARRAY_ZERO(hat.gyro);
         SET_ARRAY_ZERO(hat.pos);
-        zeroGyro[0] = ypr[0];
-        zeroGyro[1] = ypr[1];
-        zeroGyro[2] = ypr[2];
+        zeroGyro[0] = orientation[0];
+        zeroGyro[1] = orientation[1];
+        zeroGyro[2] = orientation[2];
     }
     
     // update the gyro zero values
     if ((cur_time-lastRecentre) < GYRO_WARMUP_MILLIS) {
-        zeroGyro[0] = (ZERO_DECAY_FACTOR * zeroGyro[0]) + ((1.0-ZERO_DECAY_FACTOR) * ypr[0]);
-        zeroGyro[1] = (ZERO_DECAY_FACTOR * zeroGyro[1]) + ((1.0-ZERO_DECAY_FACTOR) * ypr[1]);
-        zeroGyro[2] = (ZERO_DECAY_FACTOR * zeroGyro[2]) + ((1.0-ZERO_DECAY_FACTOR) * ypr[2]);
+        zeroGyro[0] = (ZERO_DECAY_FACTOR * zeroGyro[0]) + ((1.0-ZERO_DECAY_FACTOR) * orientation[0]);
+        zeroGyro[1] = (ZERO_DECAY_FACTOR * zeroGyro[1]) + ((1.0-ZERO_DECAY_FACTOR) * orientation[1]);
+        zeroGyro[2] = (ZERO_DECAY_FACTOR * zeroGyro[2]) + ((1.0-ZERO_DECAY_FACTOR) * orientation[2]);
     }
 
     // hatire gyro is in absolute -180 to +180 degree
     // mapped and inverted the axes so it matches my hardware configuration
-    hat.gyro[0] = +1.0 * (ypr[0]-zeroGyro[0]);
-    hat.gyro[1] = -1.0 * (ypr[1]-zeroGyro[1]);
-    hat.gyro[2] = -1.0 * (ypr[2]-zeroGyro[2]);
+    hat.gyro[0] = +1.0 * (orientation[0]-zeroGyro[0]);
+    hat.gyro[1] = -1.0 * (orientation[1]-zeroGyro[1]);
+    hat.gyro[2] = -1.0 * (orientation[2]-zeroGyro[2]);
 
     // automatic re-centre and drift correction for the gyro
     if (doRecentre) {
