@@ -94,17 +94,14 @@ void loop() {
     uint8_t cal_accel = 0;
     uint8_t cal_mag = 0;
     bno.getCalibration(&cal_system, &cal_gyro, &cal_accel, &cal_mag);
-#ifdef HUMAN_READABLE_MODE
-    Serial.print("CalSystem, CalGyro, CalAccel, CalMag:\t");
-    Serial.print(cal_system);
-    Serial.print("\t");
-    Serial.print(cal_gyro);
-    Serial.print("\t");
-    Serial.print(cal_accel);
-    Serial.print("\t");
-    Serial.println(cal_mag);
-#endif
-    if (cal_system == 0 || cal_gyro == 0) {
+    if (cal_gyro < 3) {
+        digitalWrite(LED_BUILTIN, HIGH);
+        delay(500);
+        digitalWrite(LED_BUILTIN, LOW);
+        delay(500);
+        return;
+    }
+    if (cal_system == 0) {
         digitalWrite(LED_BUILTIN, HIGH);
         delay(50);
         digitalWrite(LED_BUILTIN, LOW);
@@ -113,8 +110,13 @@ void loop() {
     }
 
     // read from the sensor
-    sensors_event_t sensor_data; 
+    sensors_event_t sensor_data;
+    const unsigned long t_sensor_start = millis(); 
     bno.getEvent(&sensor_data);
+    const unsigned long t_sensor_finish = millis();
+    
+    // time measurement
+    const unsigned long cur_time = (t_sensor_start + t_sensor_finish) / 2;
 
     // 3-array from -180 to +180 degrees each
     const float ypr[3] = {
@@ -134,10 +136,7 @@ void loop() {
         }
     }
 
-    // time measurement
-    const unsigned long cur_time = millis();
-
-    // fill the hatire frame
+    // reset for re-centre
     if (doRecentre) {
         SET_ARRAY_ZERO(meanGyro);
         SET_ARRAY_ZERO(hat.gyro);
@@ -145,25 +144,20 @@ void loop() {
         zeroGyro[0] = ypr[0];
         zeroGyro[1] = ypr[1];
         zeroGyro[2] = ypr[2];
-    } else {
-        // gyro is in absolute -180 to +180 degree
-        // mapped and inverted the axes so it matches my hardware configuration
-        hat.gyro[0] = +1.0 * (ypr[0]-zeroGyro[0]);
-        hat.gyro[1] = -1.0 * (ypr[1]-zeroGyro[1]);
-        hat.gyro[2] = -1.0 * (ypr[2]-zeroGyro[2]);
     }
     
-    // meta-data for next step
-    if (doRecentre) {
-        lastRecentre = cur_time;
-    }
-
-    // update the zero values
+    // update the gyro zero values
     if ((cur_time-lastRecentre) < GYRO_WARMUP_MILLIS) {
         zeroGyro[0] = (ZERO_DECAY_FACTOR * zeroGyro[0]) + ((1.0-ZERO_DECAY_FACTOR) * ypr[0]);
         zeroGyro[1] = (ZERO_DECAY_FACTOR * zeroGyro[1]) + ((1.0-ZERO_DECAY_FACTOR) * ypr[1]);
         zeroGyro[2] = (ZERO_DECAY_FACTOR * zeroGyro[2]) + ((1.0-ZERO_DECAY_FACTOR) * ypr[2]);
     }
+
+    // hatire gyro is in absolute -180 to +180 degree
+    // mapped and inverted the axes so it matches my hardware configuration
+    hat.gyro[0] = +1.0 * (ypr[0]-zeroGyro[0]);
+    hat.gyro[1] = -1.0 * (ypr[1]-zeroGyro[1]);
+    hat.gyro[2] = -1.0 * (ypr[2]-zeroGyro[2]);
 
     // automatic re-centre and drift correction for the gyro
     if (doRecentre) {
@@ -185,10 +179,25 @@ void loop() {
     hat.gyro[2] = hat.gyro[2] - meanGyro[2];
 
     // don't re-centre in the next step
+    if (doRecentre) {
+        lastRecentre = cur_time;
+    }
     doRecentre = false;
 
 #ifdef HUMAN_READABLE_MODE
-    Serial.print("Yaw, Pitch, Roll:\t");
+    Serial.print("Time\t");
+    Serial.print(cur_time);
+    Serial.print("\t");
+    Serial.print("Calibration\t");
+    Serial.print(cal_system);
+    Serial.print("\t");
+    Serial.print(cal_gyro);
+    Serial.print("\t");
+    Serial.print(cal_accel);
+    Serial.print("\t");
+    Serial.print(cal_mag);
+    Serial.print("\t");
+    Serial.print("Orientation\t");
     Serial.print(hat.gyro[0]);
     Serial.print("\t");
     Serial.print(hat.gyro[1]);
