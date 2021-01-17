@@ -104,20 +104,23 @@ void loop() {
     Serial.print("\t");
     Serial.println(cal_mag);
 #endif
-    if (cal_system == 0) {
-        delay(10);
+    if (cal_system == 0 || cal_gyro == 0) {
+        digitalWrite(LED_BUILTIN, HIGH);
+        delay(50);
+        digitalWrite(LED_BUILTIN, LOW);
+        delay(50);
         return;
     }
 
     // read from the sensor
-    sensors_event_t event; 
-    bno.getEvent(&event);
+    sensors_event_t sensor_data; 
+    bno.getEvent(&sensor_data);
 
     // 3-array from -180 to +180 degrees each
     const float ypr[3] = {
-        degrees_in_180(event.orientation.x),
-        degrees_in_180(event.orientation.y),
-        degrees_in_180(event.orientation.z)
+        degrees_in_180(sensor_data.orientation.x),
+        degrees_in_180(sensor_data.orientation.y),
+        degrees_in_180(sensor_data.orientation.z)
     };
 
     // centre happened in opentrack?
@@ -152,9 +155,6 @@ void loop() {
     
     // meta-data for next step
     if (doRecentre) {
-        digitalWrite(LED_BUILTIN, HIGH);
-        delay(100);
-        digitalWrite(LED_BUILTIN, LOW);
         lastRecentre = cur_time;
     }
 
