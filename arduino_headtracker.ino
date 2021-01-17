@@ -24,6 +24,7 @@ hatFrame hat;
 // general information about the tracking
 bool doRecentre = true;
 unsigned long lastRecentre = 0;
+unsigned long lastMeasurement = 0;
 
 // automatic re-centre and drift correction for the gyro
 float meanGyro[3];
@@ -110,9 +111,9 @@ void loop() {
     }
 
     // read from the sensor
-    sensors_event_t sensor_data;
+    sensors_event_t orientation_data;
     const unsigned long t_sensor_start = millis(); 
-    bno.getEvent(&sensor_data);
+    bno.getEvent(&orientation_data, Adafruit_BNO055::VECTOR_EULER);
     const unsigned long t_sensor_finish = millis();
     
     // time measurement
@@ -120,9 +121,9 @@ void loop() {
 
     // 3-array from -180 to +180 degrees each
     const float orientation[3] = {
-        degrees_in_180(sensor_data.orientation.x),
-        degrees_in_180(sensor_data.orientation.y),
-        degrees_in_180(sensor_data.orientation.z)
+        degrees_in_180(orientation_data.orientation.x),
+        degrees_in_180(orientation_data.orientation.y),
+        degrees_in_180(orientation_data.orientation.z)
     };
 
     // centre happened in opentrack?
@@ -178,9 +179,13 @@ void loop() {
     hat.gyro[1] = hat.gyro[1] - meanGyro[1];
     hat.gyro[2] = hat.gyro[2] - meanGyro[2];
 
+    // save the measurement time
+    lastMeasurement = cur_time;
+
     // don't re-centre in the next step
     if (doRecentre) {
         lastRecentre = cur_time;
+        lastMeasurement = 0;
     }
     doRecentre = false;
 
@@ -202,7 +207,14 @@ void loop() {
     Serial.print("\t");
     Serial.print(hat.gyro[1]);
     Serial.print("\t");
-    Serial.println(hat.gyro[2]);
+    Serial.print(hat.gyro[2]);
+    Serial.print("\t");
+    Serial.print("Position\t");
+    Serial.print(hat.pos[0]);
+    Serial.print("\t");
+    Serial.print(hat.pos[1]);
+    Serial.print("\t");
+    Serial.println(hat.pos[2]);
 #else
     // send the hatire frame
     Serial.write((byte*)&hat, 30);
